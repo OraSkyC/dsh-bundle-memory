@@ -2,7 +2,7 @@
   "name": "dsh-bundle-memory",
   "displayName": "记忆管理",
   "icon": "./icon.svg",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Workspace-local memory for DeepSeek Harness: an agent-managed ./memory/ store with an auto-generated MEMORY.md index, subdirectories created on demand, and four tools (save / recall / search / forget).",
   "keywords": [
     "dsh-plugin",

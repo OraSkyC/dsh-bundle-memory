@@ -196,14 +196,14 @@ dsh-bundle-memory/
 ├── CHANGELOG.md
 ├── LICENSE
 ├── test-host.mjs        # 宿主侧：59 项断言组
-└── test-client.mjs      # 浏览器侧：20 项断言组
+└── test-client.mjs      # 浏览器侧：24 项断言组
 ```
 
 ## 开发
 
 ```bash
 npm run check     # 语法检查
-npm test          # 宿主 59 项 + 客户端 20 项断言组
+npm test          # 宿主 59 项 + 客户端 24 项断言组
 ```
 
 宿主测试用真实临时目录，覆盖配置归一化、四层路径防护、front matter 往返、

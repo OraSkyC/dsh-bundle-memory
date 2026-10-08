@@ -13,40 +13,152 @@ await import("./client.js");
 let passed = 0;
 const ok = (label) => { passed += 1; console.log(`  ✓ ${label}`); };
 
-// ---- 可多次渲染的迷你 React ------------------------------------------
+// ---- 假的 React：可多次渲染的迷你实现 --------------------------------
+// 必须真的按 hook 序号保存状态、真的跑 effect，否则 PanelPage 永远停在
+// loadedOnce === false 的 loading 分支，折叠类回归根本测不到。
+//
+// **每个函数组件一份 hook 状态**，按它在树里的位置（父路径 + 同层序号）索引 ——
+// 这一点必须与真实 React 一致。早期版本让整棵树共用一个扁平数组，于是
+// 「条件渲染掉一个带 hook 的子组件」会让它后面所有组件的槽位整体前移，
+// 读到别的组件的状态：测试里真的崩在 DangerZone 的 `typed.trim()` 上，
+// 因为 typed 读到了相邻组件的 null。真实 React 不会这样，是脚手架在说谎。
 function makeReact() {
-	let slots = [], marks = [], pending = [], cleanups = [], cursor = 0;
-	const changed = (i, watch) => {
-		const prev = marks[i];
-		if (watch === undefined || prev === undefined) return true;
+	const frames = new Map();   // 组件路径 → { slots, marks, cursor, pending }
+	const counters = new Map(); // 组件路径 → 本帧已创建的带 hook 子组件数
+	let frame = null;           // 当前正在渲染的组件
+	let path = "root";
+	let cleanups = [];          // 全部已注册的 effect 清理函数
+
+	/**
+	 * 直接调用组件（不经 h()）时用的兜底 frame。
+	 *
+	 * 测试里 `renderPanel` 是直接调 `PanelPage(props)` 的，组件树里的一次性断言
+	 * 也这么调。这类调用没有树位置可言，所以共用一个兜底 frame，由 begin() 重置 ——
+	 * 与「每个由 h() 渲染的组件各有一份状态」并不冲突。
+	 */
+	const looseFrame = () => {
+		let f = frames.get("<loose>");
+		if (f === undefined) {
+			f = { slots: [], marks: [], cursor: 0, pending: [] };
+			frames.set("<loose>", f);
+		}
+		return f;
+	};
+	/** 取当前组件的 frame：在 h() 里就用它的专属 frame，否则退回兜底 frame。 */
+	const current = () => frame ?? looseFrame();
+	/** 依赖是否变化；undefined 依赖 = 每次都跑。 */
+	const changed = (f, i, watch) => {
+		const prev = f.marks[i];
+		if (watch === undefined) return true;
+		if (prev === undefined) return true;
 		if (watch.length !== prev.length) return true;
 		return watch.some((value, k) => value !== prev[k]);
 	};
-	return {
+
+	const api = {
 		createElement(type, props, ...children) {
+			// 展开数组子节点，让 h("div", {}, someArray) 与逐个传参等价
 			const flat = [];
-			for (const child of children) Array.isArray(child) ? flat.push(...child) : flat.push(child);
+			for (const child of children) {
+				if (Array.isArray(child)) flat.push(...child);
+				else flat.push(child);
+			}
+			// 函数组件要像真实 React 那样就地调用，否则树里只会留下
+			// {type: SectionCard} 这样的占位节点，永远找不到里面的按钮。
 			if (typeof type === "function") {
 				const merged = { ...(props ?? {}) };
 				// 只在真的有位置子节点时才覆盖 children —— 否则会把通过 props
 				// 传进来的 children 抹成 undefined（真实 React 也是这个行为）。
 				if (flat.length > 0) merged.children = flat.length === 1 ? flat[0] : flat;
-				return type(merged);
+
+				// 定位这个组件在树里的位置，好让它拥有稳定的一份 hook 状态
+				const parent = path;
+				const index = counters.get(parent) ?? 0;
+				counters.set(parent, index + 1);
+				const childPath = `${parent}/${type.name || "anon"}#${index}`;
+
+				let next = frames.get(childPath);
+				if (next === undefined) {
+					next = { slots: [], marks: [], cursor: 0, pending: [] };
+					frames.set(childPath, next);
+				}
+				const previousFrame = frame;
+				const previousPath = path;
+				frame = next;
+				path = childPath;
+				next.cursor = 0;
+				next.pending = [];
+				try {
+					return type(merged);
+				} finally {
+					// 子组件的 effect 在它自己渲染完时跑（React 也是子先父后），
+					// 然后恢复外层上下文。
+					for (const fn of next.pending.splice(0)) {
+						const off = fn();
+						if (typeof off === "function") cleanups.push(off);
+					}
+					frame = previousFrame;
+					path = previousPath;
+				}
 			}
 			return { type, props: props ?? null, children: flat };
 		},
 		useState(initial) {
-			const i = cursor++;
-			if (!(i in slots)) slots[i] = typeof initial === "function" ? initial() : initial;
-			return [slots[i], (next) => { slots[i] = typeof next === "function" ? next(slots[i]) : next; }];
+			const f = current();
+			const i = f.cursor++;
+			if (!(i in f.slots)) f.slots[i] = typeof initial === "function" ? initial() : initial;
+			return [f.slots[i], (next) => {
+				f.slots[i] = typeof next === "function" ? next(f.slots[i]) : next;
+			}];
 		},
-		useEffect(fn, watch) { const i = cursor++; if (changed(i, watch)) { marks[i] = watch; pending.push(fn); } },
-		useCallback(fn, watch) { const i = cursor++; if (changed(i, watch)) { marks[i] = watch; slots[i] = fn; } return slots[i]; },
-		useRef(initial) { const i = cursor++; if (!(i in slots)) slots[i] = { current: initial }; return slots[i]; },
-		begin() { cursor = 0; pending = []; },
-		flush() { for (const fn of pending.splice(0)) { const off = fn(); if (typeof off === "function") cleanups.push(off); } },
+		useEffect(fn, watch) {
+			const f = current();
+			const i = f.cursor++;
+			if (changed(f, i, watch)) {
+				f.marks[i] = watch;
+				f.pending.push(fn);
+			}
+		},		useCallback(fn, watch) {
+			const f = current();
+			const i = f.cursor++;
+			if (changed(f, i, watch)) {
+				f.marks[i] = watch;
+				f.slots[i] = fn;
+			}
+			return f.slots[i];
+		},
+		useRef(initial) {
+			const f = current();
+			const i = f.cursor++;
+			if (!(i in f.slots)) f.slots[i] = { current: initial };
+			return f.slots[i];
+		},
+		/** 开始一次渲染：重置同层序号与兜底 frame 的游标（各组件的 hook 状态保留）。 */
+		begin() {
+			counters.clear();
+			path = "root";
+			frame = null;
+			const f = looseFrame();
+			f.cursor = 0;
+			f.pending = [];
+		},
+		/**
+		 * 跑掉兜底 frame 上排队的 effect。
+		 *
+		 * 由 h() 渲染的组件，effect 在它自己渲染完时就跑了（React 也是子先父后），
+		 * 这里只剩下「组件被直接调用」那种情况需要手动推进。
+		 */
+		flush() {
+			const f = looseFrame();
+			for (const fn of f.pending.splice(0)) {
+				const off = fn();
+				if (typeof off === "function") cleanups.push(off);
+			}
+		},
+		/** 收尾：跑掉所有清理函数（清 interval / 事件监听）。 */
 		teardown() { for (const off of cleanups.splice(0)) { try { off(); } catch { /* ignore */ } } }
 	};
+	return api;
 }
 function renderPanel(reactApi, PanelPage, tt) {
 	reactApi.begin();
@@ -319,7 +431,160 @@ console.log("\n[F] 面板端到端");
 	}
 }
 
-console.log("\n[G] CSS 变量必须真实存在（回归）");
+console.log("\n[H] 保存后界面立即同步（回归）");
+{
+	// 回归点：Field / BoolField 曾经把 /settings 的响应整个丢掉，界面只能等下一次轮询
+	// 才更新。用户看到「已保存」但开关纹丝不动，退出再进设置页才显示新值
+	// —— 因为那是重新拉了一次 /state。所有走 /settings 的控件都中招，
+	// 不只是开关：文本框那边表现为「未保存」一直挂着不消失。
+	//
+	// 这个测试故意让 /settings 的响应与最初的 /state 不同，并且保存之后**不再发任何请求**：
+	// 界面只要立刻反映新值，就说明响应被采纳了。
+	const { PanelPage } = out.panel.components;
+	const zhDict = out.panel.dictionaries.zh;
+	const tt = (k) => zhDict[k] ?? k;
+
+	const initialEffective = {
+		enabled: true, root: "memory", indexFile: "MEMORY.md",
+		autoIndex: true, maxEntryBytes: 262144, searchMaxResults: 20
+	};
+	const initial = {
+		ok: true,
+		plugin: { name: "dsh-bundle-memory", entry: "memory", version: "9.9.9" },
+		effective: initialEffective,
+		defaults: initialEffective,
+		configError: null,
+		tools: ["memory_save", "memory_recall", "memory_search", "memory_forget"],
+		registeredTools: ["memory_save", "memory_recall", "memory_search", "memory_forget"]
+	};
+
+	/**
+	 * 起一张面板：/state 给 initial；/settings 回**完整状态快照**（真实宿主就是这样），
+	 * 并且之后 /state 也返回更新后的那份 —— 否则轮询会把刚写进去的值盖回旧的。
+	 */
+	async function mountWithSettings(reply, calls) {
+		let state = initial;
+		globalThis.fetch = async (path, init) => {
+			const p = String(path);
+			calls.push({ path: p, body: init && init.body ? JSON.parse(init.body) : null });
+			if (p.endsWith("/settings")) state = { ...state, ...reply };
+			return { ok: true, status: 200, json: async () => state };
+		};
+		const reactApi = freshReact();
+		renderPanel(reactApi, PanelPage, tt);
+		await new Promise((r) => setTimeout(r, 20));
+		return { reactApi, tree: renderPanel(reactApi, PanelPage, tt) };
+	}
+	const switchFor = (node, label) => findButtons(node)
+		.find((b) => b.props?.role === "switch" && b.props["aria-label"] === label);
+	const inputFor = (node, label) => {
+		let found;
+		const walk = (n) => {
+			if (found !== undefined || n === null || typeof n !== "object") return;
+			if (n.type === "input" && n.props?.["aria-label"] === label) { found = n; return; }
+			for (const c of n.children ?? []) walk(c);
+		};
+		walk(node);
+		return found;
+	};
+
+	// ── 开关：保存响应必须被采纳 ──
+	{
+		const calls = [];
+		const mounted = await mountWithSettings({
+			effective: { ...initialEffective, autoIndex: false }
+		}, calls);
+
+		assert.equal(switchFor(mounted.tree, "自动重建索引").props["aria-checked"], true, "初始应为开");
+		await switchFor(mounted.tree, "自动重建索引").props.onClick();
+
+		const sent = calls.find((c) => c.path.endsWith("/settings"));
+		assert.deepEqual(sent.body, { field: "autoIndex", value: false }, "应把新值发给宿主");
+
+		const before = calls.length;
+		const after = renderPanel(mounted.reactApi, PanelPage, tt);
+		assert.equal(calls.length, before, "重渲染不该自己再发请求");
+		assert.equal(
+			switchFor(after, "自动重建索引").props["aria-checked"],
+			false,
+			"保存后开关必须立刻反映新值（曾经要等下一次轮询）"
+		);
+		mounted.reactApi.teardown();
+		ok("切换开关 → 界面立刻同步，不依赖下一次轮询");
+	}
+
+	// ── 文本框：保存后不该还挂着「未保存」，而且要显示宿主夹取后的值 ──
+	{
+		const calls = [];
+		const mounted = await mountWithSettings({
+			effective: { ...initialEffective, searchMaxResults: 50 }
+		}, calls);
+
+		const field = inputFor(mounted.tree, "搜索默认返回条数");
+		assert.equal(field.props.value, "20", "初始应回显当前生效值");
+		field.props.onChange({ target: { value: "99999" } });
+		const dirtyTree = renderPanel(mounted.reactApi, PanelPage, tt);
+		assert.match(JSON.stringify(dirtyTree), /未保存/, "改过之后应提示未保存");
+
+		const saveButton = findButtons(dirtyTree)
+			.find((b) => b.props?.["aria-label"] === "保存 搜索默认返回条数");
+		await saveButton.props.onClick();
+
+		const sent = calls.find((c) => c.path.endsWith("/settings"));
+		assert.deepEqual(sent.body, { field: "searchMaxResults", value: "99999" }, "应把用户输入原样发给宿主");
+
+		// 迷你 React 不会因为 useEffect 里的 setState 自动重渲染（真 React 会），
+		// 而 Field 靠 useEffect 把草稿同步到新的 value，所以这里要多渲染一次。
+		renderPanel(mounted.reactApi, PanelPage, tt);
+		const after = renderPanel(mounted.reactApi, PanelPage, tt);
+		assert.equal(
+			inputFor(after, "搜索默认返回条数").props.value,
+			"50",
+			"应显示宿主夹取后的值，而不是用户打的 99999"
+		);
+		assert.ok(!JSON.stringify(after).includes("未保存"), "保存成功后不该还挂着「未保存」");
+		mounted.reactApi.teardown();
+		ok("保存文本框 → 立刻显示宿主夹取后的值，且「未保存」消失");
+	}
+
+	// ── 保存失败时不能假装成功 ──
+	{
+		const calls = [];
+		const mounted = await mountWithSettings({}, calls);
+		globalThis.fetch = async (path, init) => {
+			const p = String(path);
+			calls.push({ path: p, body: init && init.body ? JSON.parse(init.body) : null });
+			if (p.endsWith("/settings")) {
+				return { ok: false, status: 400, json: async () => ({ ok: false, error: "未知字段 'nope'" }) };
+			}
+			return { ok: true, status: 200, json: async () => initial };
+		};
+		const after = renderPanel(mounted.reactApi, PanelPage, tt);
+		await switchFor(after, "自动重建索引").props.onClick();
+		const failed = renderPanel(mounted.reactApi, PanelPage, tt);
+		assert.match(JSON.stringify(failed), /未知字段/, "失败必须显示宿主的错误");
+		assert.equal(
+			switchFor(failed, "自动重建索引").props["aria-checked"],
+			true,
+			"保存失败时开关不能自己翻过去"
+		);
+		mounted.reactApi.teardown();
+		ok("保存失败 → 显示错误且开关保持原状");
+	}
+
+	// ── 版本小标：面板头部要能看出当前跑的是哪个构建 ──
+	{
+		const { reactApi, tree } = await (async () => {
+			const mounted = await mountWithSettings({}, []);
+			return { reactApi: mounted.reactApi, tree: mounted.tree };
+		})();
+		assert.match(JSON.stringify(tree), /"v9\.9\.9"/, "面板应显示宿主报的版本号");
+		reactApi.teardown();
+		ok("面板标题显示版本号");
+	}
+}
+
+console.log("\n[I] CSS 变量必须真实存在（回归）");
 {
 	// 写一个不存在的 CSS 变量会让整条声明被判非法、静默失效，界面无任何报错。
 	const DSH_TOKENS = new Set([

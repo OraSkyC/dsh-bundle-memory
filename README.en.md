@@ -205,14 +205,14 @@ dsh-bundle-memory/
 ├── CHANGELOG.md
 ├── LICENSE
 ├── test-host.mjs        # host side: 59 assertion groups
-└── test-client.mjs      # browser side: 20 assertion groups
+└── test-client.mjs      # browser side: 24 assertion groups
 ```
 
 ## Development
 
 ```bash
 npm run check     # syntax check
-npm test          # 59 host + 20 client assertion groups
+npm test          # 59 host + 24 client assertion groups
 ```
 
 The host tests use real temporary directories and cover config normalisation, all four path-safety

@@ -22,6 +22,26 @@ var dsh_bundle_memory_client = (function () {
 	const STATE_PATH = "/api/" + NS + "/state";
 	const SETTINGS_PATH = "/api/" + NS + "/settings";
 
+	/**
+	 * 面板状态订阅：任何一次 /settings 写入成功后，把宿主的响应广播给面板。
+	 *
+	 * 为什么用订阅而不是给每个字段层层传 prop：「保存后同步界面」这件事**每个字段都必须做**，
+	 * 而漏掉一个的症状是静默的 —— 开关不动、或者「未保存」一直挂着不消失，
+	 * 只有退出重进设置页才看到新值（因为那是重新拉了一次 /state）。
+	 * 真实事故：三个插件的 Field / BoolField 都把响应整个丢掉了，界面只能等下一次轮询。
+	 * 订阅让新增字段自动获得这个行为，想漏也漏不掉。
+	 */
+	let settingsSavedListener = null;
+	/** 广播一次保存结果。没有订阅者、响应不是对象、或订阅者自己抛错，都静默跳过。 */
+	function broadcastSettingsSaved(payload) {
+		if (typeof settingsSavedListener !== "function") return;
+		try {
+			settingsSavedListener(payload);
+		} catch {
+			/* 订阅者自己出错不该影响保存本身 */
+		}
+	}
+
 	/* ------------------------------------------------------------------ */
 	/* 文案                                                                 */
 	/* ------------------------------------------------------------------ */
@@ -32,6 +52,7 @@ var dsh_bundle_memory_client = (function () {
 		"panel.error": "读取失败：{error}",
 		"panel.updated": "更新于 {time}",
 		"panel.refresh": "刷新",
+		"panel.versionHint": "宿主在激活时把客户端 bundle 读进内存，改完 client.js 需要重启 DSH 才会生效；这个版本号变了就说明新构建已加载。",
 		"panel.configError": "配置有误：{error}",
 		"panel.disabled": "插件已停用：不注册任何记忆工具。",
 		"section.status": "状态",
@@ -74,6 +95,7 @@ var dsh_bundle_memory_client = (function () {
 		"panel.error": "Failed to load: {error}",
 		"panel.updated": "Updated {time}",
 		"panel.refresh": "Refresh",
+		"panel.versionHint": "The host reads the client bundle into memory at activation, so client.js changes need a DSH restart; a new number here means the new build is loaded.",
 		"panel.configError": "Invalid config: {error}",
 		"panel.disabled": "Plugin disabled: no memory tools are registered.",
 		"section.status": "Status",
@@ -466,7 +488,9 @@ var dsh_bundle_memory_client = (function () {
 			setError(null);
 			setNotice(null);
 			try {
-				await postJsonOrThrow(SETTINGS_PATH, { field: name, value: next });
+				const body = await postJsonOrThrow(SETTINGS_PATH, { field: name, value: next });
+				// 不广播的话开关要等下一次轮询才动，用户看到的是「已保存」但开关纹丝不动
+				broadcastSettingsSaved(body);
 				flash("ok", tt("action.saved"));
 			} catch (reason) {
 				setError(tt("action.saveError").replace("{error}", reason instanceof Error ? reason.message : String(reason)));
@@ -529,7 +553,9 @@ var dsh_bundle_memory_client = (function () {
 			setError(null);
 			setNotice(null);
 			try {
-				await postJsonOrThrow(SETTINGS_PATH, { field: name, value: payloadValue });
+				const body = await postJsonOrThrow(SETTINGS_PATH, { field: name, value: payloadValue });
+				// 同上：不广播的话 dirty 会一直挂在 true 上显示「未保存」
+				broadcastSettingsSaved(body);
 				if (payloadValue === null) setDraft("");
 				flash("ok", tt("action.saved"));
 			} catch (reason) {
@@ -623,6 +649,41 @@ var dsh_bundle_memory_client = (function () {
 			}
 		}, []);
 
+		/**
+		 * 把 /settings 的响应并回面板状态。
+		 *
+		 * 这是「显示已保存但界面不动」那个 bug 的修复核心：以前这里把响应丢掉了，
+		 * 界面只能等下一次轮询才更新，用户合理地以为没生效、只能退出重进。
+		 *
+		 * 宿主回的是一份**完整状态快照**（不是只有 effective），所以整份覆盖就行 ——
+		 * 并的是宿主重算过的值，不是本地乐观值，所以非法值被夹取会立刻如实显示出来。
+		 *
+		 * 同时作废在途的轮询：那个快照可能早于这次写入，如果它晚于保存返回，
+		 * 就会把刚写进去的值又盖回旧的 —— 那就变成了「有时候灵有时候不灵」。
+		 */
+		const applySaved = useCallback((payload) => {
+			generation.current += 1;
+			inFlight.current?.abort?.();
+			inFlight.current = null;
+			setData((current) => {
+				if (current === null) return current;
+				if (payload === null || typeof payload !== "object") return current;
+				return { ...current, ...payload };
+			});
+			setUpdatedAt(Date.now());
+			// 依赖必须是空数组：函数体只用到 ref 与 setState（都稳定），
+			// 写成 [applySaved] 会在自己的初始化里读自己 —— 那是 TDZ ReferenceError。
+		}, []);
+
+		// 订阅保存结果：任何字段保存成功后都会广播，这里立刻同步界面。
+		// 卸载时只在自己仍是当前订阅者的情况下清空，免得把后来者的订阅误删。
+		useEffect(() => {
+			settingsSavedListener = applySaved;
+			return () => {
+				if (settingsSavedListener === applySaved) settingsSavedListener = null;
+			};
+		}, [applySaved]);
+
 		useEffect(() => {
 			let alive = true;
 			let timer = null;
@@ -662,7 +723,15 @@ var dsh_bundle_memory_client = (function () {
 		return h("div", { style: S.page },
 			h("div", { style: S.header },
 				h("div", { style: S.titleBlock },
-					h("h2", { style: S.title }, tt("panel.title")),
+					h("h2", { style: S.title },
+						tt("panel.title"),
+						// 版本号在这里是有用的：宿主把客户端 bundle 在激活时读进内存，
+						// 改完 client.js 不重启 DSH 看不到新界面。版本号一变就说明新构建生效了。
+						data && data.plugin && data.plugin.version
+							? h("span", { style: S.versionChip, title: tt("panel.versionHint") },
+								"v" + data.plugin.version)
+							: null
+					),
 					h("p", { style: S.subtitle }, tt("panel.subtitle"))
 				),
 				h("div", { style: S.cluster },

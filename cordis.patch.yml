@@ -1,0 +1,29 @@
+# 记忆管理 (Memory) bundle layer：注册记忆工具 entry。
+#
+# 这里写的是**部署默认值**。在插件页里改的值会落到本插件自己的状态文件
+# （$DSH_HOME/state/dsh-bundle-memory/settings.json），作为稀疏覆盖层，
+# 立即生效、无需重启。想改部署默认值，就改这里，然后重启 DSH。
+- insert:
+    - id: memory
+      name: 'dsh-bundle-memory'
+      config:
+        # 总开关：关闭后不注册任何记忆工具（面板仍可打开）。
+        enabled: true
+
+        # 记忆根目录，**相对于当前会话的工作目录**，最多 3 级。
+        # 默认 ./memory/ —— 每个工作区各有自己的一份记忆，互不干扰。
+        root: memory
+
+        # 索引文件名，位于记忆根目录下。
+        # 它是**磁盘内容的投影**：每次保存/删除后由插件重新生成，
+        # 所以永远不会和实际记忆漂移；反过来说，手工往它里面加的内容会被覆盖。
+        indexFile: MEMORY.md
+
+        # 每次保存或删除记忆后自动重建索引。
+        autoIndex: true
+
+        # 单条记忆正文上限（字节，1024–4194304）。
+        maxEntryBytes: 262144
+
+        # memory_search 默认返回条数（1–100）。
+        searchMaxResults: 20

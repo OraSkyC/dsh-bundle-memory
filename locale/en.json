@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Memory",
+    "description": "A memory store that travels with each workspace: kept under ./memory/ by default, with an auto-generated MEMORY.md index and subdirectories created on demand."
+  }
+}

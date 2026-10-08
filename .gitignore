@@ -1,0 +1,21 @@
+# 依赖与构建产物（本插件无构建步骤、无 npm 依赖）
+node_modules/
+dist/
+*.tgz
+
+# DSH 状态与本地配置
+.dsh/
+state/
+*.local.json
+
+# 记忆库本身不该进这个仓库（它属于各个工作区）
+memory/
+
+# 编辑器与系统
+*.log
+*.bak
+*.orig
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

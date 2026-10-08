@@ -1,0 +1,21 @@
+<svg width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="mem-bg" x1="18" y1="4" x2="18" y2="32" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#5EC8A8" />
+      <stop offset="1" stop-color="#1E6E58" />
+    </linearGradient>
+  </defs>
+  <!-- 底板 -->
+  <rect x="1.5" y="1.5" width="33" height="33" rx="9" fill="url(#mem-bg)" />
+  <!-- 记忆卡片：两张叠放 -->
+  <rect x="10.5" y="8.5" width="15" height="18" rx="2.4" fill="#FFFFFF" fill-opacity="0.22"
+        stroke="#FFFFFF" stroke-width="1.5" stroke-linejoin="round" />
+  <rect x="8" y="11" width="15" height="18" rx="2.4" fill="#FFFFFF"
+        stroke="#FFFFFF" stroke-width="1.5" stroke-linejoin="round" />
+  <!-- 卡片上的行 -->
+  <path d="M11.4 15.4h8.2M11.4 18.6h8.2M11.4 21.8h5.4"
+        stroke="#1E6E58" stroke-width="1.5" stroke-linecap="round" />
+  <!-- 书签：索引 -->
+  <path d="M19.2 11v6.4l2.2-1.7 2.2 1.7V11"
+        fill="#1E6E58" />
+</svg>

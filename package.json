@@ -1,0 +1,73 @@
+{
+  "name": "dsh-bundle-memory",
+  "displayName": "记忆管理",
+  "icon": "./icon.svg",
+  "version": "1.0.0",
+  "description": "Workspace-local memory for DeepSeek Harness: an agent-managed ./memory/ store with an auto-generated MEMORY.md index, subdirectories created on demand, and four tools (save / recall / search / forget).",
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "dsh-bundle",
+    "memory",
+    "notes",
+    "knowledge",
+    "agents-md"
+  ],
+  "type": "module",
+  "main": "./lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "client.js",
+    "icon.svg",
+    "locale",
+    "cordis.patch.yml",
+    "README.md",
+    "README.en.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "check": "node --check lib/index.js && node --check client.js",
+    "test": "node test-host.mjs && node test-client.mjs",
+    "test:host": "node test-host.mjs",
+    "test:client": "node test-client.mjs"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-locale"
+      ]
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": ">=4.0.0 <5.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/OraSkyC/dsh-bundle-memory.git"
+  },
+  "homepage": "https://github.com/OraSkyC/dsh-bundle-memory#readme",
+  "bugs": {
+    "url": "https://github.com/OraSkyC/dsh-bundle-memory/issues"
+  },
+  "license": "MIT"
+}
